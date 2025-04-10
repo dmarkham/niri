@@ -118,6 +118,21 @@ impl State {
     {
         let _span = tracy_client::span!("process_input_event");
 
+        // If input is inhibited, ignore almost all events except device add/remove
+        // which we might still need to handle correctly.
+        if self.niri.input_inhibited {
+            match &event {
+                InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => {
+                    // Allow device add/remove events through even when inhibited
+                }
+                _ => {
+                    // Optionally log that an event was ignored
+                    // trace!("Ignoring input event due to input inhibited state");
+                    return;
+                }
+            }
+        }
+
         // Make sure some logic like workspace clean-up has a chance to run before doing actions.
         self.niri.advance_animations();
 
@@ -450,6 +465,7 @@ impl State {
             event.state(),
             serial,
             time,
+            // --- Closure Start ---
             |this, mods, keysym| {
                 let key_code = event.key_code();
                 let modified = keysym.modified_sym();
@@ -554,24 +570,35 @@ impl State {
                     )
                 };
 
-                if matches!(res, FilterResult::Forward) {
-                    // If we didn't find any bind, try other hardcoded keys.
-                    if this.niri.keyboard_focus.is_overview() && pressed {
-                        if let Some(bind) = raw.and_then(|raw| hardcoded_overview_bind(raw, *mods))
-                        {
-                            this.niri.suppressed_keys.insert(key_code);
-                            return FilterResult::Intercept(Some(bind));
+                // Check custom input inhibition.
+                if this.niri.input_inhibited {
+                    // When inhibited, always intercept the event entirely.
+                    // Do not execute binds, do not forward to client.
+                    // The keyboard handler's internal state *is* still updated by smithay,
+                    // preventing stuck modifiers within niri itself.
+                    FilterResult::Intercept(None)
+                } else {
+                    // Not inhibited, check for additional hardcoded keys if no bind was found.
+                    if matches!(res, FilterResult::Forward) {
+                        // If we didn't find any bind, try other hardcoded keys.
+                        if this.niri.keyboard_focus.is_overview() && pressed {
+                            if let Some(bind) = raw.and_then(|raw| hardcoded_overview_bind(raw, *mods))
+                            {
+                                this.niri.suppressed_keys.insert(key_code);
+                                return FilterResult::Intercept(Some(bind));
+                            }
                         }
+
+                        // Interaction with the active window, immediately update the active window's
+                        // focus timestamp without waiting for a possible pending MRU lock-in delay.
+                        this.niri.mru_apply_keyboard_commit();
                     }
 
-                    // Interaction with the active window, immediately update the active window's
-                    // focus timestamp without waiting for a possible pending MRU lock-in delay.
-                    this.niri.mru_apply_keyboard_commit();
+                    res
                 }
-
-                res
             },
-        ) else {
+        )
+        else {
             return;
         };
 
@@ -823,6 +850,10 @@ impl State {
                         inhibitor.activate();
                     }
                 }
+            }
+            Action::InhibitInput(inhibited) => {
+                info!("Setting input inhibited state to: {}", inhibited);
+                self.niri.input_inhibited = inhibited;
             }
             Action::CloseWindow => {
                 if let Some(mapped) = self.niri.layout.focus() {
@@ -4684,6 +4715,7 @@ fn allowed_when_locked(action: &Action) -> bool {
             | Action::PowerOnMonitors
             | Action::SwitchLayout(_)
             | Action::ToggleKeyboardShortcutsInhibit
+            | Action::InhibitInput(_)
     )
 }
 

@@ -416,6 +416,9 @@ pub struct Niri {
 
     #[cfg(feature = "xdp-gnome-screencast")]
     pub casting: Screencasting,
+
+    /// Whether Niri should ignore input events.
+    pub input_inhibited: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2638,6 +2641,8 @@ impl Niri {
 
             #[cfg(feature = "xdp-gnome-screencast")]
             casting: screencasting,
+
+            input_inhibited: false,
         };
 
         niri.reset_pointer_inactivity_timer();
@@ -5841,6 +5846,12 @@ impl Niri {
     }
 
     pub fn lock(&mut self, confirmation: SessionLocker) {
+        // Prevent locking if input is currently inhibited.
+        if self.input_inhibited {
+            debug!("screen lock prevented because input is inhibited");
+            return;
+        }
+
         // Check if another client is in the process of locking.
         if matches!(
             self.lock_state,
