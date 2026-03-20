@@ -118,16 +118,17 @@ impl State {
     {
         let _span = tracy_client::span!("process_input_event");
 
-        // If input is inhibited, ignore almost all events except device add/remove
-        // which we might still need to handle correctly.
+        // If input is inhibited, ignore most events except device add/remove and keyboard.
+        // Keyboard events must still reach Smithay so XKB state (modifiers) stays consistent;
+        // the keyboard filter closure handles suppressing binds and client forwarding.
         if self.niri.input_inhibited {
             match &event {
-                InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. } => {
-                    // Allow device add/remove events through even when inhibited
+                InputEvent::DeviceAdded { .. }
+                | InputEvent::DeviceRemoved { .. }
+                | InputEvent::Keyboard { .. } => {
+                    // Allow these through even when inhibited.
                 }
                 _ => {
-                    // Optionally log that an event was ignored
-                    // trace!("Ignoring input event due to input inhibited state");
                     return;
                 }
             }
@@ -582,23 +583,24 @@ impl State {
                     if matches!(res, FilterResult::Forward) {
                         // If we didn't find any bind, try other hardcoded keys.
                         if this.niri.keyboard_focus.is_overview() && pressed {
-                            if let Some(bind) = raw.and_then(|raw| hardcoded_overview_bind(raw, *mods))
+                            if let Some(bind) =
+                                raw.and_then(|raw| hardcoded_overview_bind(raw, *mods))
                             {
                                 this.niri.suppressed_keys.insert(key_code);
                                 return FilterResult::Intercept(Some(bind));
                             }
                         }
 
-                        // Interaction with the active window, immediately update the active window's
-                        // focus timestamp without waiting for a possible pending MRU lock-in delay.
+                        // Interaction with the active window, immediately update the active
+                        // window's focus timestamp without waiting for a
+                        // possible pending MRU lock-in delay.
                         this.niri.mru_apply_keyboard_commit();
                     }
 
                     res
                 }
             },
-        )
-        else {
+        ) else {
             return;
         };
 
@@ -854,6 +856,30 @@ impl State {
             Action::InhibitInput(inhibited) => {
                 info!("Setting input inhibited state to: {}", inhibited);
                 self.niri.input_inhibited = inhibited;
+
+                if inhibited {
+                    // Stop any active key repeat.
+                    if let Some(token) = self.niri.bind_repeat_timer.take() {
+                        self.niri.event_loop.remove(token);
+                    }
+
+                    // Cancel any active pointer grab (drag, resize, etc.).
+                    let serial = SERIAL_COUNTER.next_serial();
+                    let time = get_monotonic_time().as_millis() as u32;
+                    self.niri
+                        .seat
+                        .get_pointer()
+                        .unwrap()
+                        .unset_grab(self, serial, time);
+
+                    // Cancel any active touch grab.
+                    if let Some(touch) = self.niri.seat.get_touch() {
+                        touch.unset_grab(self);
+                    }
+
+                    // Clear any in-progress gesture state.
+                    self.niri.gesture_swipe_3f_cumulative = None;
+                }
             }
             Action::CloseWindow => {
                 if let Some(mapped) = self.niri.layout.focus() {
