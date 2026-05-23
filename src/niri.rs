@@ -16,8 +16,8 @@ use calloop::futures::Scheduler;
 use niri_config::debug::PreviewRender;
 use niri_config::output::MaxBpc;
 use niri_config::{
-    Config, FloatOrInt, Key, Modifiers, OutputName, TrackLayout, WarpMouseToFocusMode,
-    WorkspaceReference, Xkb,
+    Config, FloatOrInt, HotEdge, HotEdgeDirection, Key, Modifiers, OutputName, TrackLayout,
+    WarpMouseToFocusMode, WorkspaceReference, Xkb,
 };
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::input::Keycode;
@@ -369,6 +369,7 @@ pub struct Niri {
     /// resolution mice.
     pub notified_activity_this_iteration: bool,
     pub pointer_inside_hot_corner: bool,
+    pub hot_edge_timer: Option<HotEdgeTimerState>,
     pub tablet_cursor_location: Option<Point<f64, Logical>>,
     pub gesture_swipe_3f_cumulative: Option<(f64, f64)>,
     pub overview_scroll_swipe_gesture: ScrollSwipeGesture,
@@ -542,6 +543,10 @@ pub struct PointContents {
     pub layer: Option<LayerSurface>,
     // Pointer is over a hot corner.
     pub hot_corner: bool,
+}
+
+pub struct HotEdgeTimerState {
+    pub token: RegistrationToken,
 }
 
 #[derive(Debug, Default)]
@@ -1446,6 +1451,11 @@ impl State {
         };
 
         self.niri.config_error_notification.hide();
+
+        // Cancel any pending hot-edge timer since config is changing.
+        if let Some(state) = self.niri.hot_edge_timer.take() {
+            self.niri.event_loop.remove(state.token);
+        }
 
         // Find & orphan removed named workspaces.
         let mut removed_workspaces: Vec<String> = vec![];
@@ -2594,6 +2604,7 @@ impl Niri {
             pointer_inactivity_timer_got_reset: false,
             notified_activity_this_iteration: false,
             pointer_inside_hot_corner: false,
+            hot_edge_timer: None,
             tablet_cursor_location: None,
             gesture_swipe_3f_cumulative: None,
             overview_scroll_swipe_gesture: ScrollSwipeGesture::new(),
@@ -3113,6 +3124,38 @@ impl Niri {
         }
 
         false
+    }
+
+    /// Returns the first matching hot-edge config for the given output and cursor position.
+    pub fn hot_edge_at(&self, output: &Output, pos: Point<f64, Logical>) -> Option<HotEdge> {
+        let config = self.config.borrow();
+        let output_name = output.user_data().get::<OutputName>()?;
+
+        let geom = self.global_space.output_geometry(output)?;
+        let size = geom.size.to_f64();
+
+        // Determine which edge directions the cursor is on.
+        let on_left = pos.x <= 0.;
+        let on_right = pos.x >= size.w - 1.;
+        let on_top = pos.y <= 0.;
+        let on_bottom = pos.y >= size.h - 1.;
+
+        config
+            .gestures
+            .hot_edges
+            .iter()
+            .find(|edge| {
+                if !output_name.matches(&edge.output) {
+                    return false;
+                }
+                match edge.direction {
+                    HotEdgeDirection::Left => on_left,
+                    HotEdgeDirection::Right => on_right,
+                    HotEdgeDirection::Top => on_top,
+                    HotEdgeDirection::Bottom => on_bottom,
+                }
+            })
+            .cloned()
     }
 
     pub fn is_sticky_obscured_under(

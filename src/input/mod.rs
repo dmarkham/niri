@@ -879,6 +879,11 @@ impl State {
 
                     // Clear any in-progress gesture state.
                     self.niri.gesture_swipe_3f_cumulative = None;
+
+                    // Cancel any pending hot-edge timer.
+                    if let Some(state) = self.niri.hot_edge_timer.take() {
+                        self.niri.event_loop.remove(state.token);
+                    }
                 }
             }
             Action::CloseWindow => {
@@ -2693,6 +2698,9 @@ impl State {
             self.niri.pointer_inside_hot_corner = true;
         }
 
+        // Hot-edge detection: check if cursor is clamped against a configured edge.
+        self.update_hot_edge(new_pos);
+
         // Activate a new confinement if necessary.
         self.niri.maybe_activate_pointer_constraint();
 
@@ -2779,6 +2787,9 @@ impl State {
             }
             self.niri.pointer_inside_hot_corner = true;
         }
+
+        // Hot-edge detection: check if cursor is clamped against a configured edge.
+        self.update_hot_edge(pos);
 
         self.niri.maybe_activate_pointer_constraint();
 
@@ -4448,6 +4459,54 @@ impl State {
         let grab = grab.as_any();
 
         grab.is::<PickWindowGrab>() || grab.is::<PickColorGrab>() || Self::is_dnd_grab(grab)
+    }
+
+    fn update_hot_edge(&mut self, pos: Point<f64, Logical>) {
+        let pointer = self.niri.seat.get_pointer().unwrap();
+        let grab_ok = pointer
+            .with_grab(|_, grab| grab_allows_hot_corner(grab))
+            .unwrap_or(true);
+
+        if !grab_ok {
+            // Cancel any pending hot-edge timer when a blocking grab is active.
+            if let Some(state) = self.niri.hot_edge_timer.take() {
+                self.niri.event_loop.remove(state.token);
+            }
+            return;
+        }
+
+        let edge = self
+            .niri
+            .output_under(pos)
+            .and_then(|(output, pos_within_output)| {
+                self.niri.hot_edge_at(output, pos_within_output)
+            });
+
+        if let Some(edge) = edge {
+            // Cursor is on a configured hot edge. Start a timer if one isn't already running.
+            if self.niri.hot_edge_timer.is_none() {
+                let delay = Duration::from_millis(u64::from(edge.delay_ms));
+                let timer = Timer::from_duration(delay);
+                let action = edge.action.clone();
+
+                let token = self
+                    .niri
+                    .event_loop
+                    .insert_source(timer, move |_, _, state| {
+                        state.niri.hot_edge_timer = None;
+                        state.do_action(action.clone(), false);
+                        TimeoutAction::Drop
+                    })
+                    .unwrap();
+
+                self.niri.hot_edge_timer = Some(crate::niri::HotEdgeTimerState { token });
+            }
+        } else {
+            // Cursor is not on any hot edge. Cancel any pending timer.
+            if let Some(state) = self.niri.hot_edge_timer.take() {
+                self.niri.event_loop.remove(state.token);
+            }
+        }
     }
 }
 
