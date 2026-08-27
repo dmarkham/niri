@@ -373,6 +373,9 @@ pub enum Action {
     UnsetWindowUrgent(u64),
     #[knuffel(skip)]
     InhibitInput(bool),
+    ToggleDictation,
+    #[knuffel(skip)]
+    TypeText(String),
     #[knuffel(skip)]
     LoadConfigFile(#[knuffel(argument)] Option<String>),
     #[knuffel(skip)]
@@ -706,6 +709,8 @@ impl From<niri_ipc::Action> for Action {
             niri_ipc::Action::SetWindowUrgent { id } => Self::SetWindowUrgent(id),
             niri_ipc::Action::UnsetWindowUrgent { id } => Self::UnsetWindowUrgent(id),
             niri_ipc::Action::InhibitInput { inhibited } => Self::InhibitInput(inhibited),
+            niri_ipc::Action::ToggleDictation {} => Self::ToggleDictation,
+            niri_ipc::Action::TypeText { text } => Self::TypeText(text),
             niri_ipc::Action::LoadConfigFile { path } => Self::LoadConfigFile(path),
         }
     }

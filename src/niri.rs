@@ -167,6 +167,7 @@ use crate::render_helpers::{
 #[cfg(feature = "xdp-gnome-screencast")]
 use crate::screencasting::Screencasting;
 use crate::ui::config_error_notification::ConfigErrorNotification;
+use crate::ui::dictation_indicator::DictationIndicator;
 use crate::ui::exit_confirm_dialog::{ExitConfirmDialog, ExitConfirmDialogRenderElement};
 use crate::ui::hotkey_overlay::HotkeyOverlay;
 use crate::ui::mru::{MruCloseRequest, WindowMruUi, WindowMruUiRenderElement};
@@ -389,6 +390,7 @@ pub struct Niri {
 
     pub screenshot_ui: ScreenshotUi,
     pub config_error_notification: ConfigErrorNotification,
+    pub dictation_indicator: DictationIndicator,
     pub hotkey_overlay: HotkeyOverlay,
     pub exit_confirm_dialog: ExitConfirmDialog,
 
@@ -420,6 +422,11 @@ pub struct Niri {
 
     /// Whether Niri should ignore input events.
     pub input_inhibited: bool,
+    /// The running dictation session, if any.
+    pub dictation: Option<crate::dictation::Dictation>,
+    /// Event-loop source carrying transcripts back from the worker threads.
+    /// Outlives a session so the last utterance can still be delivered.
+    pub dictation_transcripts: Option<calloop::RegistrationToken>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -2433,6 +2440,7 @@ impl Niri {
 
         let screenshot_ui = ScreenshotUi::new(animation_clock.clone(), config.clone());
         let window_mru_ui = WindowMruUi::new(config.clone());
+        let dictation_indicator = DictationIndicator::new(animation_clock.clone(), config.clone());
         let config_error_notification =
             ConfigErrorNotification::new(animation_clock.clone(), config.clone());
 
@@ -2624,6 +2632,7 @@ impl Niri {
 
             screenshot_ui,
             config_error_notification,
+            dictation_indicator,
             hotkey_overlay,
             exit_confirm_dialog,
 
@@ -2654,6 +2663,8 @@ impl Niri {
             casting: screencasting,
 
             input_inhibited: false,
+            dictation: None,
+            dictation_transcripts: None,
         };
 
         niri.reset_pointer_inactivity_timer();
@@ -4115,6 +4126,7 @@ impl Niri {
 
         self.layout.advance_animations();
         self.config_error_notification.advance_animations();
+        self.dictation_indicator.advance_animations();
         self.exit_confirm_dialog.advance_animations();
         self.screenshot_ui.advance_animations();
         self.window_mru_ui.advance_animations();
@@ -4287,6 +4299,11 @@ impl Niri {
 
         // Next, the config error notification too.
         if let Some(element) = self.config_error_notification.render(ctx.renderer, output) {
+            push(element.into());
+        }
+
+        // And the paperclip, so an open microphone is never invisible.
+        if let Some(element) = self.dictation_indicator.render(ctx.renderer, output) {
             push(element.into());
         }
 
@@ -4658,7 +4675,8 @@ impl Niri {
             let state = self.output_state.get_mut(output).unwrap();
             state.unfinished_animations_remain = self.layout.are_animations_ongoing(Some(output));
             state.unfinished_animations_remain |=
-                self.config_error_notification.are_animations_ongoing();
+                self.config_error_notification.are_animations_ongoing()
+                    || self.dictation_indicator.are_animations_ongoing();
             state.unfinished_animations_remain |= self.exit_confirm_dialog.are_animations_ongoing();
             state.unfinished_animations_remain |= self.screenshot_ui.are_animations_ongoing();
             state.unfinished_animations_remain |= self.window_mru_ui.are_animations_ongoing();

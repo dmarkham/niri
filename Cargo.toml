@@ -81,6 +81,9 @@ ordered-float = "5.3.0"
 pango = { version = "0.21.5", features = ["v1_44"] }
 pangocairo = "0.21.5"
 pipewire = { version = "0.10.0", optional = true, features = ["v0_3_33"] }
+# Blocking HTTP for the whisper server. default-features off keeps the TLS
+# stack out of the compositor; dictation talks to a plain-HTTP local server.
+ureq = { version = "3", optional = true, default-features = false }
 png = "0.18.1"
 profiling = "1.0.17"
 sd-notify = "0.5.0"
@@ -128,13 +131,15 @@ xshell = "0.2.7"
 pkg-config = "0.3.33"
 
 [features]
-default = ["dbus", "systemd", "xdp-gnome-screencast"]
+default = ["dbus", "systemd", "xdp-gnome-screencast", "dictation"]
 # Enables D-Bus support (serve various freedesktop and GNOME interfaces, accessibility tree, power button handling).
 dbus = ["dep:zbus", "dep:async-io", "dep:accesskit", "dep:accesskit_unix"]
 # Enables systemd integration (global environment, apps in transient scopes).
 systemd = ["dbus"]
 # Enables screencasting support through xdg-desktop-portal-gnome.
-xdp-gnome-screencast = ["dbus", "pipewire"]
+xdp-gnome-screencast = ["dbus", "dep:pipewire"]
+# Enables speech dictation (PipeWire capture + whisper.cpp transcription).
+dictation = ["dep:pipewire", "dep:ureq"]
 # Enables the Tracy profiler instrumentation.
 profile-with-tracy = ["profiling/profile-with-tracy", "tracy-client/default", "smithay/tracy_gpu_profiling"]
 # Enables the on-demand Tracy profiler instrumentation.

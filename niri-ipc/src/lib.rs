@@ -291,6 +291,16 @@ pub enum Action {
         #[cfg_attr(feature = "clap", arg(long))]
         inhibited: bool,
     },
+    /// Start or stop speech dictation.
+    ToggleDictation {},
+    /// Type text into the focused window.
+    ///
+    /// Uses text-input-v3 where the focused application supports it, and
+    /// synthesised key events on the current keymap otherwise.
+    TypeText {
+        /// The text to type.
+        text: String,
+    },
     /// Close a window.
     #[cfg_attr(feature = "clap", clap(about = "Close the focused window"))]
     CloseWindow {

@@ -32,6 +32,7 @@ pub mod animations;
 pub mod appearance;
 pub mod binds;
 pub mod debug;
+pub mod dictation;
 pub mod error;
 pub mod gestures;
 pub mod input;
@@ -48,6 +49,7 @@ pub use crate::animations::{Animation, Animations};
 pub use crate::appearance::*;
 pub use crate::binds::*;
 pub use crate::debug::Debug;
+pub use crate::dictation::Dictation;
 pub use crate::error::{ConfigIncludeError, ConfigParseResult};
 pub use crate::gestures::{Gestures, HotEdge, HotEdgeDirection};
 pub use crate::input::{Input, ModKey, ScrollMethod, TrackLayout, WarpMouseToFocusMode, Xkb};
@@ -92,6 +94,7 @@ pub struct Config {
     pub debug: Debug,
     pub workspaces: Vec<Workspace>,
     pub recent_windows: RecentWindows,
+    pub dictation: Dictation,
 }
 
 #[derive(Debug, Clone)]
@@ -203,6 +206,7 @@ where
                 "xwayland-satellite" => m_merge!(xwayland_satellite),
                 "switch-events" => m_merge!(switch_events),
                 "debug" => m_merge!(debug),
+                "dictation" => m_merge!(dictation),
 
                 // Multipart sections.
                 "output" => {
@@ -2392,6 +2396,17 @@ mod tests {
                         hotkey_overlay_title: None,
                     },
                 ],
+            },
+            dictation: Dictation {
+                whisper_url: "http://127.0.0.1:9876/inference",
+                language: "en",
+                chunk_ms: 3000,
+                max_chunk_ms: 10000,
+                silence_ms: 400,
+                min_speech_ms: 200,
+                min_speech_rms: 120,
+                partial_ms: 700,
+                request_timeout_ms: 30000,
             },
         }
         "#);

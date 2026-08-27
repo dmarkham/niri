@@ -46,6 +46,7 @@ use self::resize_grab::ResizeGrab;
 use self::spatial_movement_grab::SpatialMovementGrab;
 #[cfg(feature = "dbus")]
 use crate::dbus::freedesktop_a11y::KbMonBlock;
+use crate::dictation::injector::Injection;
 use crate::layout::scrolling::ScrollDirection;
 use crate::layout::{ActivateWindow, LayoutElement as _};
 use crate::niri::{CastTarget, PointerVisibility, State};
@@ -857,6 +858,15 @@ impl State {
                 info!("Setting input inhibited state to: {}", inhibited);
                 self.niri.input_inhibited = inhibited;
 
+                // Inhibiting input also means the bind that would stop
+                // dictation no longer arrives, which would leave the
+                // microphone open with no way to close it and words landing in
+                // whatever this session left focused. End the session instead.
+                if inhibited && self.niri.dictation.is_some() {
+                    info!("stopping dictation because input was inhibited");
+                    self.stop_dictation();
+                }
+
                 if inhibited {
                     // Stop any active key repeat.
                     if let Some(token) = self.niri.bind_repeat_timer.take() {
@@ -885,6 +895,12 @@ impl State {
                         self.niri.event_loop.remove(state.token);
                     }
                 }
+            }
+            Action::ToggleDictation => {
+                self.toggle_dictation();
+            }
+            Action::TypeText(text) => {
+                self.inject_text(Injection::Commit(text));
             }
             Action::CloseWindow => {
                 if let Some(mapped) = self.niri.layout.focus() {
