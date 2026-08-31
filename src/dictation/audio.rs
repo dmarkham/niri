@@ -71,12 +71,8 @@ impl Capture {
 
         let thread = thread::Builder::new()
             .name("dictation-audio".to_owned())
-            .spawn(move || match run(&to_niri, stop_rx) {
-                Ok(main_loop) => {
-                    let _ = ready_tx.send(Ok(()));
-                    main_loop.run();
-                }
-                Err(err) => {
+            .spawn(move || {
+                if let Err(err) = run(&to_niri, stop_rx, &ready_tx) {
                     let _ = ready_tx.send(Err(err));
                 }
             })
@@ -111,12 +107,14 @@ impl Capture {
     }
 }
 
-/// Build the capture stream. Runs on the PipeWire thread, since none of these
-/// objects can be moved between threads once created.
+/// Build the capture stream and run the loop until told to stop. Runs on the
+/// PipeWire thread, since none of these objects can be moved between threads
+/// once created. Reports on `ready` once the stream is connected.
 fn run(
     to_niri: &calloop::channel::Sender<Vec<u8>>,
     stop: pipewire::channel::Receiver<()>,
-) -> anyhow::Result<MainLoopRc> {
+    ready: &mpsc::Sender<anyhow::Result<()>>,
+) -> anyhow::Result<()> {
     let main_loop = MainLoopRc::new(None).context("error creating MainLoop")?;
     let context = ContextRc::new(&main_loop, None).context("error creating Context")?;
     let core = context.connect_rc(None).context("error connecting Core")?;
@@ -199,12 +197,22 @@ fn run(
         move |()| main_loop.quit()
     });
 
-    // These have to outlive the loop but are not otherwise referenced.
-    std::mem::forget(listener);
-    std::mem::forget(attached);
-    std::mem::forget(stream);
-
     debug!("dictation capture started at {SAMPLE_RATE} Hz mono s16");
+    let _ = ready.send(Ok(()));
 
-    Ok(main_loop)
+    main_loop.run();
+
+    // Tear the stream down explicitly, then let the locals drop in reverse
+    // order (listener, stream, core, context, loop). Leaking them instead
+    // left a zombie capture node in the graph for every dictation session,
+    // each one holding the microphone open.
+    let _ = stream.disconnect();
+    drop(attached);
+    drop(listener);
+    drop(stream);
+    drop(core);
+    drop(context);
+    debug!("dictation capture stopped");
+
+    Ok(())
 }
